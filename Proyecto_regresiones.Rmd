@@ -1,0 +1,241 @@
+---
+title: "Study of wich variables affect miles per galon"
+author: "Cristobal Morgado"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    fig_caption: yes
+    number_sections: yes
+    fig_width: 5
+    fig_height: 3
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+    number_sections: yes
+---
+# Introduction
+The overall aim of this proyect is try to explain the variables that effect the most the miles per galon of a car. For this purpose, we use the mtcars data set. Also the packages dplyr, ggplot2, car and lmtest are used. The methodology is to use an ANOVA analysis to find relationships between mpg and other variables, with them construct a model and test some transformations of it. Finally we test the models to check if a variable is inflating the variance (VIF test) and if there is heterocedasticity (bptest). With this results we will select a model and make inferences on the resultant coefficients.
+
+*Code available at: https://github.com/CMorgadoM/Proyecto_regresiones_mtcars*
+```{r dataset and packages, echo=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lmtest)
+library(car)
+
+mtcars <- mtcars
+```
+
+#  Summary and transformations
+The first step is to get some descriptions of the data and transform the 
+variables "am", "vs", "cyl" to class factor.
+```{r summary and transformations, results='hide', echo=FALSE}
+summary(mtcars)
+str(mtcars)
+# transform data
+mtcars$am <- factor(levels = c(0,1), labels = c("automatic", "manual"), x = mtcars$am)
+mtcars$vs <- factor(levels = c(0,1), labels = c("V-shaped", "straight"), x = mtcars$vs)
+mtcars <- mutate(mtcars, cyl_factor = factor(mtcars$cyl,levels = c(4,6,8)))
+```
+
+#  Modeling
+Once we understand the data set, the next step is to create a model with all original variables and test the model with and anova analysis to find the variables which impact in mpg is significant.
+Here we found that variables "am", "wt" and "hp" are significant, so that variables are selected to construct the initial models.
+```{r modelling, dev='pdf', echo=FALSE, results='asis'}
+
+model1 <- lm(mpg~am+wt+hp+cyl+qsec+disp+vs+carb+gear+drat, data = mtcars)
+stargazer::stargazer(anova(model1), summary = F, header = F, title = "ANOVA")
+```
+we build 3 models, one with am, cyl, wt and hp as independent variables; a second one without cyl (as it wasn't significant in the model); and a third one with an interaction between am and wt and hp.
+All three models ended up having a large R-squared and a significant F test.
+```{r, results='hide', echo=FALSE}
+model2 <- lm(mpg~0+am+cyl+wt+hp, data=mtcars)
+summary(model2)
+# since cyl is not significant we test what happens if we remove the variable from the model
+model3 <- lm(mpg~0+am+wt+hp, data=mtcars)
+summary(model3)
+
+#checking if an interaction between am and the other variables is meaningful
+model4 <- lm(mpg~0+wt*am+hp*am, data=mtcars)
+summary(model4)
+```
+
+```{r testing VIF, warning=FALSE, results='hide', echo=FALSE, message=FALSE}
+vif(model2)
+vif(model3)
+vif(model4)
+
+model_test <- summary(lm(mpg~am+hp, data = mtcars))
+r.squared_test <- model_test$adj.r.squared
+model_3_summ <- summary(model3)
+r.squared_3 <- model_3_summ$adj.r.squared
+
+# Construct model 5 and 6 and test their VIF
+model_5 <- lm(mpg~0+am*wt, data = mtcars)
+model_6 <- lm(mpg~0+am*hp, data = mtcars)
+
+vif(model_5)
+vif(model_6)
+
+
+
+```
+The test VIF shows that all models have high variance inflation factors, the model3 is the one with the lesser values so we test taking out the "wt" variable and the result is that the Adjusted R-squared pass from `r round(r.squared_3,3)` to `r round(r.squared_test,3)`, since the difference is huge and the variable is significant we keep working with the model3.
+
+Also, we construct model_5 and model_6, using model4 formula and taking out one interaction; model_5 maintain "am * wt" and model_6 maintain "am * hp". From this two models the model_5 has the best VIF results of all models tested.
+
+The test Brauch-Pagan to test heterocedasticity. With the 4 out of 5 models we reject the null Hypothesis so we assume homocedasticity in every model except in model 6.
+```{r testing heterocedasticity, dev='pdf', echo=FALSE, results='asis'}
+bpm2<-bptest(model2)
+bpm3<-bptest(model3)
+bpm4<-bptest(model4)
+bpm5<-bptest(model_5)
+bpm6<-bptest(model_6)
+
+
+tabla1 <- data.frame(cbind(rbind("model 2","model 3","model 4", "model 5", "model 6")
+      ,rbind(round(bpm2$p.value, 2), 
+             round(bpm3$p.value,2), 
+             round(bpm4$p.value,2), 
+             round(bpm5$p.value,2),
+             round(bpm6$p.value,2))))
+names(tabla1) <- c("model", "BP test P-value")
+stargazer::stargazer(tabla1, summary = F, header = F, title = "BP test results")
+
+
+
+```
+
+# conclusions
+After all these analysis we decide to use the model_5 to make inference of the population.
+This is because, in this model, the interaction term allows to understand better the impact of the variables in the miles per galon consumption for each type of transmission.
+
+```{r, results='hide', echo=FALSE}
+means <- mtcars %>% 
+    mutate(y_hat = fitted(model_5)) %>% 
+    group_by(am) %>% 
+    summarise(avg_y_hat = mean(y_hat))
+```
+
+With this model we can assume that the mean of the impact for cars with automatic transmission is `r round(means[1,2],2)` MPG per 1 lb more of weight and for cars with manual transmission, the mean of the effects is `r round(means[2,2],2)` MPG per 1 lb more of weight.
+
+```{r, echo=FALSE}
+dif <- as.numeric(means[2,2]-means[1,2])
+mean_test_conf_int <- dif + c(-1,1) * qt(0.975, 32-1)* sd(mtcars$mpg)/sqrt(32)
+```
+
+
+Finally, by performing a median test, we try to find out if the difference of the means is significant. The result of the test is a confidence interval between `r round(mean_test_conf_int[1],2)` and `r round(mean_test_conf_int[2],2)`. Since the interval doesn't contain zero we can assume that the difference predicted by the model between manual and automatic transmission is significant.  
+
+# Appendix
+
+## Predicted vs actual values for mpg with model_5
+
+```{r, dev='png', echo=FALSE, warning=FALSE}
+if(!file.exists("plot1.png")){
+    png(filename = "plot1.png", width = 375, height = 200)
+    mtcars %>% cbind( predict(model_5, interval = "prediction")) %>% 
+        mutate(y_hat = fitted(model_5)) %>% 
+        group_by(am) %>% 
+        ggplot(aes(x=y_hat, y=mpg))+
+        geom_point()+
+        geom_line(aes(y=fit), colour="blue", lwd=1)+
+        geom_ribbon(aes(ymin=lwr, ymax=upr), fill="grey", alpha=0.5)+
+        theme_bw()+
+        labs(title = "Fitted vs actual values of MPG. Full model", 
+             subtitle = "We can see that most points are within the predicted interval")
+    dev.off()
+} else{knitr::include_graphics("plot1.png")}
+```
+
+## Change in slope per transmission type
+```{r, dev='png', echo=FALSE, message=FALSE, warning=FALSE}
+if(!file.exists("plot4.png")){
+    png("plot4.png", width = 375, height = 200)
+    mtcars %>% 
+        mutate(y_hat = fitted(model_5)) %>% 
+        ggplot(aes(mpg, y_hat, color=am))+
+        geom_point()+
+        geom_smooth(method = "lm")+
+        labs(title = "Change in slope per transmission type",
+             subtitle = "The different slope is caused by the interaction \n term, and represetn a different effect of wt in the mpg for automatic and manual transmission")+
+        theme_bw()
+    dev.off()
+} else{knitr::include_graphics("plot4.png")}
+```
+
+
+## residuals vs fitted values for model_5
+
+```{r, dev='png', echo=FALSE}
+if(!file.exists("plot2.png")){
+    png("plot2.png", width = 375, height = 200)
+    mtcars %>% 
+        mutate(yhat = fitted(model_5)) %>% 
+        mutate(uhat = residuals(model_5)) %>% 
+        ggplot(aes(x=yhat, y=uhat))+
+        theme_bw()+
+        geom_point()+
+        geom_hline(yintercept = 0)+
+        labs(title = "residuals model 5")
+    dev.off()
+} else {knitr::include_graphics("plot2.png")}
+
+```
+
+
+## Other models residuals plots
+
+```{r plot residuals, dev='png', echo=FALSE}
+if(!file.exists("plot3.png")){
+png("plot3.png", width = 400, height = 250)
+g1 <- mtcars %>% 
+    mutate(yhat = fitted(model2)) %>% 
+    mutate(uhat = residuals(model2)) %>% 
+    ggplot(aes(x=yhat, y=uhat))+
+    theme_bw()+
+    geom_point()+
+    geom_hline(yintercept = 0)+
+    labs(title = "residuals model 2")
+g2 <- mtcars %>% 
+    mutate(yhat = fitted(model3)) %>% 
+    mutate(uhat = residuals(model3)) %>% 
+    ggplot(aes(x=yhat, y=uhat))+
+    theme_bw()+
+    geom_point()+
+    geom_hline(yintercept = 0)+
+    labs(title = "residuals model 3")
+g3 <- mtcars %>% 
+    mutate(yhat = fitted(model4)) %>% 
+    mutate(uhat = residuals(model4)) %>% 
+    ggplot(aes(x=yhat, y=uhat))+
+    theme_bw()+
+    geom_point()+
+    geom_hline(yintercept = 0)+
+    labs(title = "residuals model 4")
+g4 <- mtcars %>% 
+    mutate(yhat = fitted(model_6)) %>% 
+    mutate(uhat = residuals(model_6)) %>% 
+    ggplot(aes(x=yhat, y=uhat))+
+    theme_bw()+
+    geom_point()+
+    geom_hline(yintercept = 0)+
+    labs(title = "residuals model 6")
+
+g <- gridExtra::arrangeGrob(g1,g2,g3,g4, nrow = 2, ncol = 2)
+grid::grid.newpage()
+grid::grid.draw(g)
+dev.off()
+} else{knitr::include_graphics("plot3.png")}
+
+```
+
+## Model 5 coefficients and summary
+
+```{r, dev='pdf', echo=FALSE, results='asis'}
+stargazer::stargazer(model_5, summary = F, header = F, title = "Model 5 Summary")
+```
+
+
+
+
